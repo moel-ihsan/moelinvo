@@ -486,7 +486,7 @@ if st.button("Save Invoice PDF + JSON", disabled=save_disabled):
     token = generate_token()
     save_receipt_metadata(invoice_no, token, json_path, pdf_path)
 
-    APP_URL = "http://localhost:8501"
+    APP_URL = "https://moelinvo.streamlit.app"
     receipt_link = f"{APP_URL}?token={token}"
 
     if overwrite_existing:
