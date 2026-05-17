@@ -62,8 +62,28 @@ def load_receipt_by_token(token: str) -> dict | None:
         return None
 
 def generate_pdf_from_html(html_content: str, output_path: str):
+    chromium_paths = [
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+        "/snap/bin/chromium",
+    ]
+
+    executable_path = None
+    for path in chromium_paths:
+        if Path(path).exists():
+            executable_path = path
+            break
+
     with sync_playwright() as p:
-        browser = p.chromium.launch()
+        launch_kwargs = {
+            "headless": True,
+            "args": ["--no-sandbox", "--disable-dev-shm-usage"],
+        }
+
+        if executable_path:
+            launch_kwargs["executable_path"] = executable_path
+
+        browser = p.chromium.launch(**launch_kwargs)
         page = browser.new_page()
 
         page.set_content(html_content, wait_until="networkidle")
