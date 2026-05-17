@@ -254,10 +254,20 @@ def load_receipt_by_token_drive(token: str) -> dict | None:
     except Exception:
         return None
     
-
 def generate_pdf_from_html(html_content: str, output_path: str):
+    chromium_path = (
+        shutil.which("chromium")
+        or shutil.which("chromium-browser")
+        or "/usr/bin/chromium"
+        or "/usr/bin/chromium-browser"
+    )
+
+    if not chromium_path or not Path(chromium_path).exists():
+        raise RuntimeError("System Chromium not found.")
+
     with sync_playwright() as p:
         browser = p.chromium.launch(
+            executable_path=chromium_path,
             headless=True,
             args=[
                 "--no-sandbox",
