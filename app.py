@@ -280,6 +280,7 @@ if token:
         st.stop()
 
     pdf_path = Path(receipt["pdf"])
+    json_path = Path(receipt["json"])
 
     st.title("🧾 Receipt")
     st.write(f"Invoice No: `{receipt['invoice_no']}`")
@@ -293,26 +294,24 @@ if token:
             file_name=pdf_path.name,
             mime="application/pdf",
         )
+    else:
+        st.error("File PDF tidak ditemukan.")
 
-        from streamlit.components.v1 import html
+    if json_path.exists():
+        invoice_json = json.loads(json_path.read_text(encoding="utf-8"))
 
-        pdf_base64 = base64.b64encode(pdf_bytes).decode("utf-8")
+        preview_data = {
+            **invoice_json,
+            "discount": invoice_json.get("pricing", {}).get("discount", 0),
+            "tax_rate": invoice_json.get("tax_rate", 0),
+        }
 
-        html(
-            f"""
-            <embed
-                src="data:application/pdf;base64,{pdf_base64}"
-                type="application/pdf"
-                width="100%"
-                height="900px"
-            />
-            """,
-            height=900,
-        )
+        receipt_html = render_invoice(preview_data, css)
+        components.html(receipt_html, height=1200, scrolling=True)
 
         st.success("Receipt valid. Silakan download PDF invoice.")
     else:
-        st.error("File PDF tidak ditemukan.")
+        st.warning("Preview invoice tidak tersedia karena file JSON tidak ditemukan.")
 
     st.stop()
 
