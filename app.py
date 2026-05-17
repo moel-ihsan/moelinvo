@@ -294,6 +294,20 @@ if token:
             mime="application/pdf",
         )
 
+        pdf_b64 = base64.b64encode(pdf_bytes).decode("utf-8")
+
+        st.markdown(
+            f"""
+            <iframe
+                src="data:application/pdf;base64,{pdf_b64}"
+                width="100%"
+                height="900px"
+                style="border: 1px solid #ddd; border-radius: 8px;"
+            ></iframe>
+            """,
+            unsafe_allow_html=True,
+        )
+
         st.success("Receipt valid. Silakan download PDF invoice.")
     else:
         st.error("File PDF tidak ditemukan.")
@@ -484,7 +498,7 @@ if st.button("Save Invoice PDF + JSON", disabled=save_disabled):
     )
 
     token = generate_token()
-    save_receipt_metadata(invoice_no, token, json_path, pdf_path)
+    receipt_path = save_receipt_metadata(invoice_no, token, json_path, pdf_path)
 
     APP_URL = "https://moelinvo.streamlit.app"
     receipt_link = f"{APP_URL}?token={token}"
@@ -492,6 +506,8 @@ if st.button("Save Invoice PDF + JSON", disabled=save_disabled):
     if overwrite_existing:
         st.success("Invoice lama berhasil dioverride.")
     else:
-        st.success("Invoice baru berhasil disimpan.")
+        st.success("Invoice berhasil disimpan.")
 
+    st.write(f"Token: `{token}`")
+    st.write(f"Receipt metadata: `{receipt_path}`")
     st.code(receipt_link)
