@@ -11,6 +11,13 @@ import base64
 import secrets
 import shutil
 
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.transport.requests import Request
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
+import io
+
 
 BASE_DIR = Path(__file__).parent
 CSS_PATH = BASE_DIR / "style.css"
@@ -28,39 +35,172 @@ RECEIPT_DIR = INVOICE_DIR / "receipts"
 
 st.set_page_config(page_title="MOELDSGN Invoice", page_icon="🧾", layout="wide")
 
+SCOPES = ["https://www.googleapis.com/auth/drive"]
+
+
+@st.cache_resource
+def get_drive_service():
+
+    creds = None
+
+    token_path = BASE_DIR / "token.json"
+    creds_path = BASE_DIR / "credentials.json"
+
+    if token_path.exists():
+        creds = Credentials.from_authorized_user_file(
+            str(token_path),
+            SCOPES
+        )
+
+    if not creds or not creds.valid:
+
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(
+                str(creds_path),
+                SCOPES
+            )
+
+            creds = flow.run_local_server(port=0)
+
+        token_path.write_text(creds.to_json())
+
+    return build("drive", "v3", credentials=creds)
+
+
+try:
+    service = get_drive_service()
+    st.sidebar.success("Google Drive connected")
+except Exception as e:
+    st.sidebar.error("Google Drive not connected")
+    st.sidebar.exception(e)
+
+def upload_bytes_to_drive(
+    file_bytes: bytes,
+    filename: str,
+    mime_type: str,
+    folder_id: str,
+):
+    service = get_drive_service()
+
+    file_metadata = {
+        "name": filename,
+        "parents": [folder_id],
+    }
+
+    media = MediaIoBaseUpload(
+        io.BytesIO(file_bytes),
+        mimetype=mime_type,
+        resumable=False,
+    )
+
+    uploaded = service.files().create(
+        body=file_metadata,
+        media_body=media,
+        fields="id,name,webViewLink",
+        supportsAllDrives=True,
+    ).execute()
+
+    return uploaded
+
+
+def find_drive_file(filename: str, folder_id: str):
+    service = get_drive_service()
+
+    query = (
+        f"name='{filename}' "
+        f"and '{folder_id}' in parents "
+        f"and trashed=false"
+    )
+
+    response = service.files().list(
+        q=query,
+        fields="files(id,name)",
+        supportsAllDrives=True,
+        includeItemsFromAllDrives=True,
+    ).execute()
+
+    files = response.get("files", [])
+
+    if not files:
+        return None
+
+    return files[0]
+
+
+def download_drive_file(file_id: str):
+    service = get_drive_service()
+
+    request = service.files().get_media(fileId=file_id)
+
+    buffer = io.BytesIO()
+
+    downloader = MediaIoBaseDownload(buffer, request)
+
+    done = False
+    while not done:
+        _, done = downloader.next_chunk()
+
+    return buffer.getvalue()
+
+
+def download_drive_file_by_name(filename: str, folder_id: str) -> bytes | None:
+    file = find_drive_file(filename, folder_id)
+
+    if not file:
+        return None
+
+    return download_drive_file(file["id"])
+
+
 def generate_token() -> str:
     return secrets.token_urlsafe(16)
 
 
-def save_receipt_metadata(invoice_no: str, token: str, json_path: Path, pdf_path: Path) -> Path:
-    RECEIPT_DIR.mkdir(parents=True, exist_ok=True)
+def save_receipt_metadata_drive(invoice_no: str, token: str) -> dict:
+    receipt_folder_id = st.secrets["GOOGLE_DRIVE_RECEIPT_FOLDER_ID"]
 
     receipt_data = {
         "token": token,
         "invoice_no": invoice_no,
-        "json": str(json_path),
-        "pdf": str(pdf_path),
+        "json_filename": safe_invoice_filename(invoice_no, "json"),
+        "pdf_filename": safe_invoice_filename(invoice_no, "pdf"),
     }
 
-    receipt_path = RECEIPT_DIR / f"{token}.json"
-    receipt_path.write_text(
-        json.dumps(receipt_data, ensure_ascii=False, indent=2),
-        encoding="utf-8",
+    receipt_bytes = json.dumps(
+        receipt_data,
+        ensure_ascii=False,
+        indent=2
+    ).encode("utf-8")
+
+    uploaded = upload_bytes_to_drive(
+        file_bytes=receipt_bytes,
+        filename=f"{token}.json",
+        mime_type="application/json",
+        folder_id=receipt_folder_id,
     )
 
-    return receipt_path
+    return uploaded
 
 
-def load_receipt_by_token(token: str) -> dict | None:
-    receipt_path = RECEIPT_DIR / f"{token}.json"
+def load_receipt_by_token_drive(token: str) -> dict | None:
+    receipt_folder_id = st.secrets["GOOGLE_DRIVE_RECEIPT_FOLDER_ID"]
 
-    if not receipt_path.exists():
+    data_bytes = download_drive_file_by_name(
+        filename=f"{token}.json",
+        folder_id=receipt_folder_id,
+    )
+
+    if data_bytes is None:
         return None
 
     try:
-        return json.loads(receipt_path.read_text(encoding="utf-8"))
+        return json.loads(data_bytes.decode("utf-8"))
     except Exception:
         return None
+    
 
 def generate_pdf_from_html(html_content: str, output_path: str):
 
@@ -68,13 +208,14 @@ def generate_pdf_from_html(html_content: str, output_path: str):
         shutil.which("chromium")
         or shutil.which("chromium-browser")
         or shutil.which("google-chrome")
+        or "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        or "/Applications/Chromium.app/Contents/MacOS/Chromium"
     )
 
-    if not chromium_path:
-        raise RuntimeError("Chromium browser not found.")
+    if not Path(chromium_path).exists():
+        raise RuntimeError("Chromium / Google Chrome browser not found.")
 
     with sync_playwright() as p:
-
         browser = p.chromium.launch(
             executable_path=chromium_path,
             headless=True,
@@ -82,12 +223,10 @@ def generate_pdf_from_html(html_content: str, output_path: str):
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
                 "--disable-gpu",
-                "--single-process",
             ],
         )
 
         page = browser.new_page()
-
         page.set_content(html_content, wait_until="networkidle")
 
         page.pdf(
@@ -273,32 +412,41 @@ brand_config = load_brand_config()
 token = st.query_params.get("token")
 
 if token:
-    receipt = load_receipt_by_token(token)
+    receipt = load_receipt_by_token_drive(token)
 
     if receipt is None:
         st.error("Receipt tidak ditemukan atau token tidak valid.")
         st.stop()
 
-    pdf_path = Path(receipt["pdf"])
-    json_path = Path(receipt["json"])
+    invoice_no = receipt["invoice_no"]
+    json_filename = receipt["json_filename"]
+    pdf_filename = receipt["pdf_filename"]
+
+    json_bytes = download_drive_file_by_name(
+        filename=json_filename,
+        folder_id=st.secrets["GOOGLE_DRIVE_JSON_FOLDER_ID"],
+    )
+
+    pdf_bytes = download_drive_file_by_name(
+        filename=pdf_filename,
+        folder_id=st.secrets["GOOGLE_DRIVE_PDF_FOLDER_ID"],
+    )
 
     st.title("🧾 Receipt")
-    st.write(f"Invoice No: `{receipt['invoice_no']}`")
+    st.write(f"Invoice No: `{invoice_no}`")
 
-    if pdf_path.exists():
-        pdf_bytes = pdf_path.read_bytes()
-
+    if pdf_bytes:
         st.download_button(
             "Download Receipt PDF",
             data=pdf_bytes,
-            file_name=pdf_path.name,
+            file_name=pdf_filename,
             mime="application/pdf",
         )
     else:
-        st.error("File PDF tidak ditemukan.")
+        st.error("File PDF tidak ditemukan di Google Drive.")
 
-    if json_path.exists():
-        invoice_json = json.loads(json_path.read_text(encoding="utf-8"))
+    if json_bytes:
+        invoice_json = json.loads(json_bytes.decode("utf-8"))
 
         preview_data = {
             **invoice_json,
@@ -407,21 +555,6 @@ invoice_data = {
     "notes": notes,
 }
 
-def invoice_no_exists(invoice_no: str) -> bool:
-    JSON_DIR.mkdir(parents=True, exist_ok=True)
-
-    for file in JSON_DIR.glob("*.json"):
-        try:
-            data = json.loads(file.read_text(encoding="utf-8"))
-            existing_no = data.get("invoice", {}).get("number", "")
-            if existing_no == invoice_no:
-                return True
-        except Exception:
-            pass
-
-    return False
-
-
 def safe_invoice_filename(invoice_no: str, ext: str) -> str:
     safe_name = (
         invoice_no
@@ -431,38 +564,75 @@ def safe_invoice_filename(invoice_no: str, ext: str) -> str:
     )
     return f"{safe_name}.{ext}"
 
+def invoice_no_exists_drive(invoice_no: str) -> bool:
+    json_folder_id = st.secrets["GOOGLE_DRIVE_JSON_FOLDER_ID"]
+    pdf_folder_id = st.secrets["GOOGLE_DRIVE_PDF_FOLDER_ID"]
 
-def save_invoice_files(
+    json_filename = safe_invoice_filename(invoice_no, "json")
+    pdf_filename = safe_invoice_filename(invoice_no, "pdf")
+
+    return (
+        find_drive_file(json_filename, json_folder_id) is not None
+        or find_drive_file(pdf_filename, pdf_folder_id) is not None
+    )
+
+
+def delete_drive_file(file_id: str):
+    service = get_drive_service()
+
+    service.files().delete(
+        fileId=file_id,
+        supportsAllDrives=True,
+    ).execute()
+
+
+def delete_drive_file_by_name(filename: str, folder_id: str):
+    file = find_drive_file(filename, folder_id)
+
+    if file:
+        delete_drive_file(file["id"])
+
+
+def save_invoice_files_drive(
     invoice_no: str,
     json_text: str,
     pdf_bytes: bytes,
     overwrite: bool = False,
-) -> tuple[Path, Path]:
+) -> dict:
+    json_folder_id = st.secrets["GOOGLE_DRIVE_JSON_FOLDER_ID"]
+    pdf_folder_id = st.secrets["GOOGLE_DRIVE_PDF_FOLDER_ID"]
 
-    JSON_DIR.mkdir(parents=True, exist_ok=True)
-    PDF_DIR.mkdir(parents=True, exist_ok=True)
-
-    json_path = JSON_DIR / safe_invoice_filename(invoice_no, "json")
-    pdf_path = PDF_DIR / safe_invoice_filename(invoice_no, "pdf")
+    json_filename = safe_invoice_filename(invoice_no, "json")
+    pdf_filename = safe_invoice_filename(invoice_no, "pdf")
 
     if not overwrite:
-        if json_path.exists() or pdf_path.exists():
+        if invoice_no_exists_drive(invoice_no):
             raise FileExistsError(f"Invoice {invoice_no} sudah ada.")
 
-    json_path.write_text(json_text, encoding="utf-8")
-    pdf_path.write_bytes(pdf_bytes)
+    if overwrite:
+        delete_drive_file_by_name(json_filename, json_folder_id)
+        delete_drive_file_by_name(pdf_filename, pdf_folder_id)
 
-    index_data = {
-        "json": sorted([p.name for p in JSON_DIR.glob("*.json")]),
-        "pdf": sorted([p.name for p in PDF_DIR.glob("*.pdf")]),
-    }
-
-    INDEX_PATH.write_text(
-        json.dumps(index_data, ensure_ascii=False, indent=2),
-        encoding="utf-8"
+    json_uploaded = upload_bytes_to_drive(
+        file_bytes=json_text.encode("utf-8"),
+        filename=json_filename,
+        mime_type="application/json",
+        folder_id=json_folder_id,
     )
 
-    return json_path, pdf_path
+    pdf_uploaded = upload_bytes_to_drive(
+        file_bytes=pdf_bytes,
+        filename=pdf_filename,
+        mime_type="application/pdf",
+        folder_id=pdf_folder_id,
+    )
+
+    return {
+        "json": json_uploaded,
+        "pdf": pdf_uploaded,
+        "json_filename": json_filename,
+        "pdf_filename": pdf_filename,
+    }
 
 html_doc = render_invoice(invoice_data, css)
 
@@ -473,7 +643,7 @@ with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
 components.html(html_doc, height=1200, scrolling=True)
 
 json_text = build_invoice_json(invoice_data)
-is_duplicate = invoice_no_exists(invoice_no)
+is_duplicate = invoice_no_exists_drive(invoice_no)
 
 overwrite_existing = False
 
@@ -491,7 +661,7 @@ save_disabled = is_duplicate and not overwrite_existing
 
 if st.button("Save Invoice PDF + JSON", disabled=save_disabled):
 
-    json_path, pdf_path = save_invoice_files(
+    saved_files = save_invoice_files_drive(
         invoice_no=invoice_no,
         json_text=json_text,
         pdf_bytes=pdf_bytes,
@@ -499,7 +669,7 @@ if st.button("Save Invoice PDF + JSON", disabled=save_disabled):
     )
 
     token = generate_token()
-    receipt_path = save_receipt_metadata(invoice_no, token, json_path, pdf_path)
+    receipt_file = save_receipt_metadata_drive(invoice_no, token)
 
     APP_URL = "https://moelinvo.streamlit.app"
     receipt_link = f"{APP_URL}?token={token}"
@@ -510,5 +680,5 @@ if st.button("Save Invoice PDF + JSON", disabled=save_disabled):
         st.success("Invoice berhasil disimpan.")
 
     st.write(f"Token: `{token}`")
-    st.write(f"Receipt metadata: `{receipt_path}`")
+    st.write(f"Receipt metadata: `{receipt_file['name']}`")
     st.code(receipt_link)
