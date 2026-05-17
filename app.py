@@ -258,12 +258,11 @@ def generate_pdf_from_html(html_content: str, output_path: str):
     chromium_path = (
         shutil.which("chromium")
         or shutil.which("chromium-browser")
-        or "/usr/bin/chromium"
-        or "/usr/bin/chromium-browser"
+        or shutil.which("google-chrome")
     )
 
-    if not chromium_path or not Path(chromium_path).exists():
-        raise RuntimeError("System Chromium not found.")
+    if not chromium_path:
+        raise RuntimeError("System Chromium not found. Check packages.txt.")
 
     with sync_playwright() as p:
         browser = p.chromium.launch(
