@@ -9,6 +9,7 @@ from playwright.sync_api import sync_playwright
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 import base64
 import secrets
+import shutil
 
 
 BASE_DIR = Path(__file__).parent
@@ -62,28 +63,29 @@ def load_receipt_by_token(token: str) -> dict | None:
         return None
 
 def generate_pdf_from_html(html_content: str, output_path: str):
-    chromium_paths = [
-        "/usr/bin/chromium",
-        "/usr/bin/chromium-browser",
-        "/snap/bin/chromium",
-    ]
 
-    executable_path = None
-    for path in chromium_paths:
-        if Path(path).exists():
-            executable_path = path
-            break
+    chromium_path = (
+        shutil.which("chromium")
+        or shutil.which("chromium-browser")
+        or shutil.which("google-chrome")
+    )
+
+    if not chromium_path:
+        raise RuntimeError("Chromium browser not found.")
 
     with sync_playwright() as p:
-        launch_kwargs = {
-            "headless": True,
-            "args": ["--no-sandbox", "--disable-dev-shm-usage"],
-        }
 
-        if executable_path:
-            launch_kwargs["executable_path"] = executable_path
+        browser = p.chromium.launch(
+            executable_path=chromium_path,
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--single-process",
+            ],
+        )
 
-        browser = p.chromium.launch(**launch_kwargs)
         page = browser.new_page()
 
         page.set_content(html_content, wait_until="networkidle")
@@ -92,12 +94,6 @@ def generate_pdf_from_html(html_content: str, output_path: str):
             path=output_path,
             format="A4",
             print_background=True,
-            margin={
-                "top": "0mm",
-                "right": "0mm",
-                "bottom": "0mm",
-                "left": "0mm",
-            },
         )
 
         browser.close()
