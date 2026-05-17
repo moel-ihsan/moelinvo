@@ -51,12 +51,7 @@ def get_drive_service():
     return build("drive", "v3", credentials=creds)
 
 
-try:
-    service = get_drive_service()
-    st.sidebar.success("Google Drive connected")
-except Exception as e:
-    st.sidebar.error("Google Drive not connected")
-    st.sidebar.exception(e)
+get_drive_service()
 
 def upload_bytes_to_drive(
     file_bytes: bytes,
@@ -444,6 +439,33 @@ if token:
 
     st.stop()
 
+
+admin_email = st.secrets["ADMIN_EMAIL"]
+
+if not st.user.is_logged_in:
+    st.title("🔐 MOELINVO Admin")
+    st.warning("Admin area. Silakan login terlebih dahulu.")
+
+    if st.button("Login with Google"):
+        st.login()
+
+    st.stop()
+
+if st.user.email != admin_email:
+    st.error("Akses ditolak. Halaman ini hanya untuk admin.")
+
+    if st.button("Logout"):
+        st.logout()
+
+    st.stop()
+
+with st.sidebar:
+    st.caption(f"Admin: {st.user.email}")
+
+    if st.button("Logout"):
+        st.logout()
+
+        
 st.title("🧾 MOELDSGN Invoice Generator")
 
 with st.sidebar:
