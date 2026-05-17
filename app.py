@@ -133,6 +133,84 @@ def download_drive_file_by_name(filename: str, folder_id: str) -> bytes | None:
 def generate_token() -> str:
     return secrets.token_urlsafe(16)
 
+def safe_invoice_filename(invoice_no: str, ext: str) -> str:
+    safe_name = (
+        invoice_no
+        .replace("/", "-")
+        .replace("\\", "-")
+        .replace(" ", "-")
+    )
+    return f"{safe_name}.{ext}"
+
+def invoice_no_exists_drive(invoice_no: str) -> bool:
+    json_folder_id = st.secrets["GOOGLE_DRIVE_JSON_FOLDER_ID"]
+    pdf_folder_id = st.secrets["GOOGLE_DRIVE_PDF_FOLDER_ID"]
+
+    json_filename = safe_invoice_filename(invoice_no, "json")
+    pdf_filename = safe_invoice_filename(invoice_no, "pdf")
+
+    return (
+        find_drive_file(json_filename, json_folder_id) is not None
+        or find_drive_file(pdf_filename, pdf_folder_id) is not None
+    )
+
+
+def delete_drive_file(file_id: str):
+    service = get_drive_service()
+
+    service.files().delete(
+        fileId=file_id,
+        supportsAllDrives=True,
+    ).execute()
+
+
+def delete_drive_file_by_name(filename: str, folder_id: str):
+    file = find_drive_file(filename, folder_id)
+
+    if file:
+        delete_drive_file(file["id"])
+
+
+def save_invoice_files_drive(
+    invoice_no: str,
+    json_text: str,
+    pdf_bytes: bytes,
+    overwrite: bool = False,
+) -> dict:
+    json_folder_id = st.secrets["GOOGLE_DRIVE_JSON_FOLDER_ID"]
+    pdf_folder_id = st.secrets["GOOGLE_DRIVE_PDF_FOLDER_ID"]
+
+    json_filename = safe_invoice_filename(invoice_no, "json")
+    pdf_filename = safe_invoice_filename(invoice_no, "pdf")
+
+    if not overwrite:
+        if invoice_no_exists_drive(invoice_no):
+            raise FileExistsError(f"Invoice {invoice_no} sudah ada.")
+
+    if overwrite:
+        delete_drive_file_by_name(json_filename, json_folder_id)
+        delete_drive_file_by_name(pdf_filename, pdf_folder_id)
+
+    json_uploaded = upload_bytes_to_drive(
+        file_bytes=json_text.encode("utf-8"),
+        filename=json_filename,
+        mime_type="application/json",
+        folder_id=json_folder_id,
+    )
+
+    pdf_uploaded = upload_bytes_to_drive(
+        file_bytes=pdf_bytes,
+        filename=pdf_filename,
+        mime_type="application/pdf",
+        folder_id=pdf_folder_id,
+    )
+
+    return {
+        "json": json_uploaded,
+        "pdf": pdf_uploaded,
+        "json_filename": json_filename,
+        "pdf_filename": pdf_filename,
+    }
 
 def save_receipt_metadata_drive(invoice_no: str, token: str) -> dict:
     receipt_folder_id = st.secrets["GOOGLE_DRIVE_RECEIPT_FOLDER_ID"]
@@ -178,21 +256,8 @@ def load_receipt_by_token_drive(token: str) -> dict | None:
     
 
 def generate_pdf_from_html(html_content: str, output_path: str):
-
-    chromium_path = (
-        shutil.which("chromium")
-        or shutil.which("chromium-browser")
-        or shutil.which("google-chrome")
-        or "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-        or "/Applications/Chromium.app/Contents/MacOS/Chromium"
-    )
-
-    if not Path(chromium_path).exists():
-        raise RuntimeError("Chromium / Google Chrome browser not found.")
-
     with sync_playwright() as p:
         browser = p.chromium.launch(
-            executable_path=chromium_path,
             headless=True,
             args=[
                 "--no-sandbox",
@@ -470,6 +535,118 @@ with st.sidebar:
 
 st.title("🧾 MOELDSGN Invoice Generator")
 
+with st.expander("📦 Bulk Import Old Invoice JSON", expanded=False):
+    st.caption(
+        "Upload banyak file JSON invoice lama untuk dibuatkan PDF dan receipt link secara otomatis."
+    )
+
+    bulk_files = st.file_uploader(
+        "Upload file JSON invoice lama",
+        type=["json"],
+        accept_multiple_files=True,
+        key="bulk_json_upload",
+    )
+
+    overwrite_bulk = st.checkbox(
+        "Overwrite invoice lama jika invoice number sudah ada",
+        value=True,
+        key="overwrite_bulk",
+    )
+
+    run_bulk = st.button(
+        "Generate PDF + Receipt",
+        disabled=not bulk_files,
+        key="run_bulk_import",
+    )
+
+    if run_bulk:
+        results = []
+
+        progress = st.progress(0)
+        total_files = len(bulk_files)
+
+        for idx, uploaded_file in enumerate(bulk_files, start=1):
+            try:
+                invoice_json = json.loads(uploaded_file.getvalue().decode("utf-8"))
+
+                invoice_no = invoice_json.get("invoice", {}).get("number")
+                if not invoice_no:
+                    results.append({
+                        "file": uploaded_file.name,
+                        "status": "FAILED",
+                        "message": "Invoice number tidak ditemukan",
+                        "receipt_link": "",
+                    })
+                    progress.progress(idx / total_files)
+                    continue
+
+                if invoice_no_exists_drive(invoice_no) and not overwrite_bulk:
+                    results.append({
+                        "file": uploaded_file.name,
+                        "status": "SKIPPED",
+                        "message": f"{invoice_no} sudah ada",
+                        "receipt_link": "",
+                    })
+                    progress.progress(idx / total_files)
+                    continue
+
+                preview_data = {
+                    **invoice_json,
+                    "discount": invoice_json.get("pricing", {}).get("discount", 0),
+                    "tax_rate": invoice_json.get("tax_rate", 0),
+                }
+
+                html_doc_bulk = render_invoice(preview_data, css)
+
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
+                    generate_pdf_from_html(html_doc_bulk, tmp_pdf.name)
+                    bulk_pdf_bytes = Path(tmp_pdf.name).read_bytes()
+
+                json_text_bulk = json.dumps(
+                    invoice_json,
+                    ensure_ascii=False,
+                    indent=2,
+                )
+
+                save_invoice_files_drive(
+                    invoice_no=invoice_no,
+                    json_text=json_text_bulk,
+                    pdf_bytes=bulk_pdf_bytes,
+                    overwrite=overwrite_bulk,
+                )
+
+                token_bulk = generate_token()
+                save_receipt_metadata_drive(invoice_no, token_bulk)
+
+                receipt_link = f"https://moelinvo.streamlit.app/?token={token_bulk}"
+
+                results.append({
+                    "file": uploaded_file.name,
+                    "status": "OK",
+                    "message": f"Generated for {invoice_no}",
+                    "receipt_link": receipt_link,
+                })
+
+            except Exception as e:
+                results.append({
+                    "file": uploaded_file.name,
+                    "status": "FAILED",
+                    "message": str(e),
+                    "receipt_link": "",
+                })
+
+            progress.progress(idx / total_files)
+
+        st.success("Bulk import selesai.")
+        st.dataframe(results, use_container_width=True)
+
+        st.download_button(
+            "Download Receipt Links JSON",
+            data=json.dumps(results, ensure_ascii=False, indent=2),
+            file_name="bulk_receipt_links.json",
+            mime="application/json",
+        )
+
 with st.sidebar:
     st.header("Brand")
     brand_tagline = st.text_input("Tagline", brand_config["brand"]["tagline"])
@@ -559,85 +736,6 @@ invoice_data = {
     "tax_rate": tax_rate,
     "notes": notes,
 }
-
-def safe_invoice_filename(invoice_no: str, ext: str) -> str:
-    safe_name = (
-        invoice_no
-        .replace("/", "-")
-        .replace("\\", "-")
-        .replace(" ", "-")
-    )
-    return f"{safe_name}.{ext}"
-
-def invoice_no_exists_drive(invoice_no: str) -> bool:
-    json_folder_id = st.secrets["GOOGLE_DRIVE_JSON_FOLDER_ID"]
-    pdf_folder_id = st.secrets["GOOGLE_DRIVE_PDF_FOLDER_ID"]
-
-    json_filename = safe_invoice_filename(invoice_no, "json")
-    pdf_filename = safe_invoice_filename(invoice_no, "pdf")
-
-    return (
-        find_drive_file(json_filename, json_folder_id) is not None
-        or find_drive_file(pdf_filename, pdf_folder_id) is not None
-    )
-
-
-def delete_drive_file(file_id: str):
-    service = get_drive_service()
-
-    service.files().delete(
-        fileId=file_id,
-        supportsAllDrives=True,
-    ).execute()
-
-
-def delete_drive_file_by_name(filename: str, folder_id: str):
-    file = find_drive_file(filename, folder_id)
-
-    if file:
-        delete_drive_file(file["id"])
-
-
-def save_invoice_files_drive(
-    invoice_no: str,
-    json_text: str,
-    pdf_bytes: bytes,
-    overwrite: bool = False,
-) -> dict:
-    json_folder_id = st.secrets["GOOGLE_DRIVE_JSON_FOLDER_ID"]
-    pdf_folder_id = st.secrets["GOOGLE_DRIVE_PDF_FOLDER_ID"]
-
-    json_filename = safe_invoice_filename(invoice_no, "json")
-    pdf_filename = safe_invoice_filename(invoice_no, "pdf")
-
-    if not overwrite:
-        if invoice_no_exists_drive(invoice_no):
-            raise FileExistsError(f"Invoice {invoice_no} sudah ada.")
-
-    if overwrite:
-        delete_drive_file_by_name(json_filename, json_folder_id)
-        delete_drive_file_by_name(pdf_filename, pdf_folder_id)
-
-    json_uploaded = upload_bytes_to_drive(
-        file_bytes=json_text.encode("utf-8"),
-        filename=json_filename,
-        mime_type="application/json",
-        folder_id=json_folder_id,
-    )
-
-    pdf_uploaded = upload_bytes_to_drive(
-        file_bytes=pdf_bytes,
-        filename=pdf_filename,
-        mime_type="application/pdf",
-        folder_id=pdf_folder_id,
-    )
-
-    return {
-        "json": json_uploaded,
-        "pdf": pdf_uploaded,
-        "json_filename": json_filename,
-        "pdf_filename": pdf_filename,
-    }
 
 html_doc = render_invoice(invoice_data, css)
 
