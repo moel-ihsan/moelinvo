@@ -442,7 +442,10 @@ if token:
 
 admin_email = st.secrets["ADMIN_EMAIL"]
 
-if not st.user.is_logged_in:
+user = st.user.to_dict()
+is_logged_in = user.get("is_logged_in", False)
+
+if not is_logged_in:
     st.title("🔐 MOELINVO Admin")
     st.warning("Admin area. Silakan login terlebih dahulu.")
 
@@ -451,7 +454,7 @@ if not st.user.is_logged_in:
 
     st.stop()
 
-if st.user.email != admin_email:
+if user.get("email") != admin_email:
     st.error("Akses ditolak. Halaman ini hanya untuk admin.")
 
     if st.button("Logout"):
@@ -460,12 +463,12 @@ if st.user.email != admin_email:
     st.stop()
 
 with st.sidebar:
-    st.caption(f"Admin: {st.user.email}")
+    st.caption(f"Admin: {user.get('email')}")
 
     if st.button("Logout"):
         st.logout()
 
-        
+
 st.title("🧾 MOELDSGN Invoice Generator")
 
 with st.sidebar:
