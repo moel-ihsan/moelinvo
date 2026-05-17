@@ -40,32 +40,13 @@ SCOPES = ["https://www.googleapis.com/auth/drive"]
 
 @st.cache_resource
 def get_drive_service():
+    creds = Credentials.from_authorized_user_info(
+        dict(st.secrets["google_oauth_token"]),
+        SCOPES
+    )
 
-    creds = None
-
-    token_path = BASE_DIR / "token.json"
-    creds_path = BASE_DIR / "credentials.json"
-
-    if token_path.exists():
-        creds = Credentials.from_authorized_user_file(
-            str(token_path),
-            SCOPES
-        )
-
-    if not creds or not creds.valid:
-
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(
-                str(creds_path),
-                SCOPES
-            )
-
-            creds = flow.run_local_server(port=0)
-
-        token_path.write_text(creds.to_json())
+    if creds and creds.expired and creds.refresh_token:
+        creds.refresh(Request())
 
     return build("drive", "v3", credentials=creds)
 
