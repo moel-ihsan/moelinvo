@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    {{ css | safe }}
+    body { padding: 0; }
+    .share-btn-group { display: none !important; }
+  </style>
+</head>
+
+<body>
+  <div id="invoice">
+    <div class="inv-header">
+      <div class="brand-block">
+        <div class="brand-box">MOELDSGN</div>
+        <div class="brand-contact">
+          <span>{{ brand.tagline }}</span><br>
+          ✆ &nbsp;<span>{{ brand.phone }}</span><br>
+          ✉ &nbsp;<span>{{ brand.email }}</span><br>
+          ⌘ &nbsp;<span>{{ brand.sosmed }}</span>
+        </div>
+      </div>
+
+      <div class="inv-title-block">
+        <div class="inv-title">Invoice</div>
+        <div class="inv-subtitle">Graphic Design Services</div>
+      </div>
+    </div>
+
+    <div class="inv-meta">
+      <div>
+        <div class="bill-label">Bill To</div>
+        <div class="client-name">{{ client.name }}</div>
+        <div class="client-program">{{ client.program }}</div>
+      </div>
+
+      <div class="meta-right">
+        <div class="meta-row">
+          <span class="meta-key">Invoice No</span>
+          <span class="meta-val">{{ invoice.number }}</span>
+        </div>
+        <div class="meta-row">
+          <span class="meta-key">Invoice Date</span>
+          <span class="meta-val">{{ invoice.date }}</span>
+        </div>
+        <div class="meta-row">
+          <span class="meta-key">Due Date</span>
+          <span class="meta-val">
+            {{ invoice.dueDate }} &nbsp;<span class="due-pill">DUE</span>
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <table class="inv-table">
+        <thead>
+          <tr>
+            <th style="width:32px;">No</th>
+            <th>Product / Description</th>
+            <th style="width:44px;">Qty</th>
+            <th style="width:100px;">Unit Price</th>
+            <th style="width:100px;">Subtotal</th>
+          </tr>
+        </thead>
+
+        <tbody>
+          {% for item in items %}
+          <tr>
+            <td class="item-no">{{ item.no }}</td>
+            <td>
+              <div class="item-name">{{ item.description }}</div>
+
+              {% if item.detail %}
+              <div class="item-detail">{{ item.detail }}</div>
+              {% endif %}
+
+              {% if item.link %}
+              <a class="item-link" href="{{ item.link }}" target="_blank">↗ Design File Link</a>
+              {% endif %}
+            </td>
+            <td class="center">{{ item.qty }}</td>
+            <td class="right">{{ item.price }}</td>
+            <td class="right">{{ item.subtotal }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="totals-wrap">
+      <div class="totals-box">
+        <div class="tot-row">
+          <span>Original Price</span>
+          <span>{{ original_total }}</span>
+        </div>
+        <div class="tot-row discount">
+          <span>Discount</span>
+          <span>– {{ discount }}</span>
+        </div>
+        <div class="tot-row tax">
+          <span>Tax / PPN</span>
+          <span>{{ tax_text }}</span>
+        </div>
+        <div class="tot-row final">
+          <span class="tot-label-accent">TOTAL DUE</span>
+          <span>{{ final_total }}</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="bottom-grid">
+      <div>
+        <div class="bottom-title">Payment Method</div>
+        <div class="payment-method">
+          <div class="bank-name">{{ payment.bank }}</div>
+          <div class="rek-no">{{ payment.rekening }}</div>
+          <div class="rek-an">{{ payment.atasNama }}</div>
+          {% if payment.alternative %}
+          <div class="pay-alt-label">Atau via transfer ke:</div>
+          <div class="pay-alt">{{ payment.alternative | replace('\n', '<br>') | safe }}</div>
+          {% endif %}
+          <div class="pay-alt">{{ payment.alternative | replace('\n', '<br>') | safe }}</div>
+        </div>
+      </div>
+
+      <div>
+        <div class="bottom-title">Notes</div>
+        <ul class="notes-list">
+          {% for note in notes %}
+          <li>{{ note }}</li>
+          {% endfor %}
+        </ul>
+      </div>
+
+      <div>
+        <div class="bottom-title">Issued By</div>
+        <div class="sig-area">
+          {% if signature.mode == "image" and signature.image %}
+          <img class="sig-image" src="{{ signature.image }}" alt="Signature">
+          {% else %}
+          <div class="sig-script">{{ signature.script }}</div>
+          {% endif %}
+
+          <div class="sig-name">{{ signature.fullName }}</div>
+          <div class="sig-role">{{ signature.role }}</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="inv-footer">
+      <div class="footer-left">Thank you for trusting MOELDSGN ✦</div>
+      <div class="footer-right">
+        <span class="footer-email">{{ brand.email }}</span>
+        <span class="footer-brand">MOELDSGN</span>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

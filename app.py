@@ -1,0 +1,481 @@
+import json
+from datetime import date, timedelta
+from pathlib import Path
+
+import streamlit as st
+import streamlit.components.v1 as components
+import tempfile
+from playwright.sync_api import sync_playwright
+from jinja2 import Environment, FileSystemLoader, select_autoescape
+import base64
+import secrets
+
+
+BASE_DIR = Path(__file__).parent
+CSS_PATH = BASE_DIR / "style.css"
+
+TEMPLATE_DIR = BASE_DIR / "templates"
+
+INVOICE_DIR = BASE_DIR / "invoice"
+INDEX_PATH = INVOICE_DIR / "index.json"
+JSON_DIR = INVOICE_DIR / "json"
+PDF_DIR = INVOICE_DIR / "pdf"
+
+CONFIG_DIR = BASE_DIR / "config"
+BRAND_CONFIG_PATH = CONFIG_DIR / "brand_config.json"
+RECEIPT_DIR = INVOICE_DIR / "receipts"
+
+st.set_page_config(page_title="MOELDSGN Invoice", page_icon="🧾", layout="wide")
+
+def generate_token() -> str:
+    return secrets.token_urlsafe(16)
+
+
+def save_receipt_metadata(invoice_no: str, token: str, json_path: Path, pdf_path: Path) -> Path:
+    RECEIPT_DIR.mkdir(parents=True, exist_ok=True)
+
+    receipt_data = {
+        "token": token,
+        "invoice_no": invoice_no,
+        "json": str(json_path),
+        "pdf": str(pdf_path),
+    }
+
+    receipt_path = RECEIPT_DIR / f"{token}.json"
+    receipt_path.write_text(
+        json.dumps(receipt_data, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    return receipt_path
+
+
+def load_receipt_by_token(token: str) -> dict | None:
+    receipt_path = RECEIPT_DIR / f"{token}.json"
+
+    if not receipt_path.exists():
+        return None
+
+    try:
+        return json.loads(receipt_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+def generate_pdf_from_html(html_content: str, output_path: str):
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+
+        page.set_content(html_content, wait_until="networkidle")
+
+        page.pdf(
+            path=output_path,
+            format="A4",
+            print_background=True,
+            margin={
+                "top": "0mm",
+                "right": "0mm",
+                "bottom": "0mm",
+                "left": "0mm",
+            },
+        )
+
+        browser.close()
+
+
+def load_css() -> str:
+    if CSS_PATH.exists():
+        return CSS_PATH.read_text(encoding="utf-8")
+    return ""
+
+
+def rupiah(amount: int) -> str:
+    return "IDR " + f"{int(amount):,}".replace(",", ".")
+
+def get_latest_invoice_file() -> Path | None:
+    if INDEX_PATH.exists():
+        try:
+            index_data = json.loads(INDEX_PATH.read_text(encoding="utf-8"))
+            files = index_data.get("files", [])
+            invoice_files = [f for f in files if f.startswith("invoice-") and f.endswith(".json")]
+            if invoice_files:
+                latest = sorted(invoice_files)[-1]
+                latest_path = INVOICE_DIR / latest
+                if latest_path.exists():
+                    return latest_path
+        except Exception:
+            pass
+
+    files = sorted(JSON_DIR.glob("*.json"))
+    return files[-1] if files else None
+
+
+def load_default_invoice() -> dict:
+    latest_path = get_latest_invoice_file()
+    if latest_path and latest_path.exists():
+        try:
+            return json.loads(latest_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    return {
+        "invoice": {"number": "MOEL-INV-001", "date": "17 May 2026", "dueDate": "24 May 2026"},
+        "client": {"name": "Nama Client", "program": "Website / Graphic Design"},
+        "items": [
+            {"description": "Pembuatan Website", "detail": "Project website company profile", "qty": 1, "price": 3500000, "link": ""},
+            {"description": "Termin Pembayaran Kedua", "detail": "Pembayaran lanjutan setelah uang muka", "qty": 1, "price": 500000, "link": ""},
+        ],
+        "pricing": {"discount": 0},
+        "notes": [
+            "Prices apply to digital design services only.", 
+            "Printing services are not included.",
+            "All design files are delivered digitally via Canva links.",
+            "Each product item represents a specific design output."
+        ],
+    }
+
+
+def load_brand_config() -> dict:
+    default_config = {
+        "brand": {
+            "tagline": "Graphic Design Services",
+            "phone": "wa.me/6281234567890",
+            "email": "moeldsgn@gmail.com",
+            "sosmed": "@moeldsgn",
+        },
+        "payment": {
+            "bank": "BCA / BRI",
+            "rekening": "1234 5678 901",
+            "atasNama": "a/n Moel Design",
+            "alternative": "GoPay / OVO / Dana\n0812-3456-7890",
+        },
+        "signature": {
+            "mode": "script",
+            "script": "Moeldsgn~",
+            "image": "assets/signature/signature.png",
+            "fullName": "MOELDSGN",
+            "role": "Graphic Design Services",
+        },
+    }
+
+    if BRAND_CONFIG_PATH.exists():
+        try:
+            return json.loads(BRAND_CONFIG_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    BRAND_CONFIG_PATH.write_text(
+        json.dumps(default_config, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return default_config
+
+def render_invoice(data: dict, css: str) -> str:
+    original_total = sum(int(item["qty"]) * int(item["price"]) for item in data["items"])
+    discount = int(data.get("discount", 0))
+    after_discount = original_total - discount
+    tax_rate = float(data.get("tax_rate", 0))
+    tax_amount = round(after_discount * tax_rate)
+    final_total = after_discount + tax_amount
+
+    rendered_items = []
+    for idx, item in enumerate(data["items"], start=1):
+        qty = int(item["qty"])
+        price = int(item["price"])
+        subtotal = qty * price
+
+        rendered_items.append({
+            "no": idx,
+            "description": item.get("description", ""),
+            "detail": item.get("detail", ""),
+            "link": item.get("link", ""),
+            "qty": qty,
+            "price": rupiah(price),
+            "subtotal": rupiah(subtotal),
+        })
+
+    tax_text = f"{rupiah(tax_amount)} ({tax_rate * 100:.0f}%)" if tax_rate > 0 else "IDR 0"
+
+    env = Environment(
+        loader=FileSystemLoader(TEMPLATE_DIR),
+        autoescape=select_autoescape(["html", "xml"]),
+    )
+
+    sig = dict(data["signature"])
+    if sig.get("mode") == "image" and sig.get("image"):
+        image_path = BASE_DIR / sig["image"]
+
+        if image_path.exists():
+            ext = image_path.suffix.lower().replace(".", "")
+            mime = "jpeg" if ext in ["jpg", "jpeg"] else ext
+
+            img_bytes = image_path.read_bytes()
+            img_b64 = base64.b64encode(img_bytes).decode("utf-8")
+
+            sig["image"] = f"data:image/{mime};base64,{img_b64}"
+        else:
+            sig["mode"] = "script"
+
+    template = env.get_template("invoice_template.html")
+
+    return template.render(
+        css=css,
+        brand=data["brand"],
+        payment=data["payment"],
+        signature=sig,
+        invoice=data["invoice"],
+        client=data["client"],
+        items=rendered_items,
+        notes=data.get("notes", []),
+        original_total=rupiah(original_total),
+        discount=rupiah(discount),
+        tax_text=tax_text,
+        final_total=rupiah(final_total),
+    )
+
+
+def build_invoice_json(data: dict) -> str:
+    export_data = {
+        "brand": data["brand"],
+        "payment": data["payment"],
+        "signature": data["signature"],
+        "invoice": data["invoice"],
+        "client": data["client"],
+        "items": data["items"],
+        "pricing": {"discount": data.get("discount", 0)},
+        "tax_rate": data.get("tax_rate", 0),
+        "notes": data.get("notes", []),
+    }
+    return json.dumps(export_data, ensure_ascii=False, indent=2)
+
+
+css = load_css()
+default_invoice = load_default_invoice()
+brand_config = load_brand_config()
+
+token = st.query_params.get("token")
+
+if token:
+    receipt = load_receipt_by_token(token)
+
+    if receipt is None:
+        st.error("Receipt tidak ditemukan atau token tidak valid.")
+        st.stop()
+
+    pdf_path = Path(receipt["pdf"])
+
+    st.title("🧾 Receipt")
+    st.write(f"Invoice No: `{receipt['invoice_no']}`")
+
+    if pdf_path.exists():
+        pdf_bytes = pdf_path.read_bytes()
+
+        st.download_button(
+            "Download Receipt PDF",
+            data=pdf_bytes,
+            file_name=pdf_path.name,
+            mime="application/pdf",
+        )
+
+        st.success("Receipt valid. Silakan download PDF invoice.")
+    else:
+        st.error("File PDF tidak ditemukan.")
+
+    st.stop()
+
+st.title("🧾 MOELDSGN Invoice Generator")
+
+with st.sidebar:
+    st.header("Brand")
+    brand_tagline = st.text_input("Tagline", brand_config["brand"]["tagline"])
+    brand_phone = st.text_input("Phone / WA", brand_config["brand"]["phone"])
+    brand_email = st.text_input("Email", brand_config["brand"]["email"])
+    brand_sosmed = st.text_input("Sosmed", brand_config["brand"]["sosmed"])
+
+    st.header("Payment")
+    bank = st.text_input("Bank", brand_config["payment"]["bank"])
+    rekening = st.text_input("No. Rekening", brand_config["payment"]["rekening"])
+    atas_nama = st.text_input("Atas Nama", brand_config["payment"]["atasNama"])
+    pay_alt = st.text_area("Alternatif", brand_config["payment"]["alternative"])
+
+    st.header("Signature")
+    sig_mode = st.selectbox(
+        "Mode Tanda Tangan",
+        ["script", "image"],
+        index=0 if brand_config["signature"].get("mode", "script") == "script" else 1,
+    )
+
+    sig_script = st.text_input("Script", brand_config["signature"].get("script", "Moeldsgn~"))
+    sig_image = st.text_input("Image Path", brand_config["signature"].get("image", "assets/signature/signature.png"))
+    sig_name = st.text_input("Nama", brand_config["signature"]["fullName"])
+    sig_role = st.text_input("Role", brand_config["signature"]["role"])
+
+col1, col2 = st.columns(2)
+with col1:
+    invoice_no = st.text_input("Invoice No", default_invoice.get("invoice", {}).get("number", "MOEL-INV-001"))
+    invoice_date = st.date_input("Invoice Date", date.today())
+    due_date = st.date_input("Due Date", date.today() + timedelta(days=7))
+with col2:
+    client_name = st.text_input("Client Name", default_invoice.get("client", {}).get("name", "Nama Client"))
+    client_program = st.text_input("Program / Project", default_invoice.get("client", {}).get("program", "Website / Graphic Design"))
+    tax_rate = st.number_input("PPN / Tax Rate", min_value=0.0, max_value=1.0, value=0.0, step=0.01)
+
+st.subheader("Items")
+default_items = default_invoice.get("items", []) or []
+item_count = st.number_input("Jumlah item", min_value=1, max_value=20, value=max(1, len(default_items)), step=1)
+
+items = []
+for i in range(item_count):
+    fallback = default_items[i] if i < len(default_items) else {"description": "", "detail": "", "qty": 1, "price": 0, "link": ""}
+    with st.expander(f"Item {i + 1}", expanded=i < 3):
+        c1, c2, c3 = st.columns([3, 1, 2])
+        desc = c1.text_input("Deskripsi", fallback.get("description", ""), key=f"desc_{i}")
+        qty = c2.number_input("Qty", min_value=1, value=int(fallback.get("qty", 1)), key=f"qty_{i}")
+        price = c3.number_input("Harga", min_value=0, value=int(fallback.get("price", 0)), step=50000, key=f"price_{i}")
+        detail = st.text_input("Detail", fallback.get("detail", ""), key=f"detail_{i}")
+        link = st.text_input("Link File", fallback.get("link", ""), key=f"link_{i}")
+        items.append({"description": desc, "qty": qty, "price": price, "detail": detail, "link": link})
+
+discount = st.number_input("Discount", min_value=0, value=int(default_invoice.get("pricing", {}).get("discount", 0)), step=50000)
+notes_raw = st.text_area("Notes", "\n".join(default_invoice.get("notes", [])))
+notes = [line.strip() for line in notes_raw.splitlines() if line.strip()]
+
+invoice_data = {
+    "brand": {
+        "tagline": brand_tagline,
+        "phone": brand_phone,
+        "email": brand_email,
+        "sosmed": brand_sosmed,
+    },
+    "payment": {
+        "bank": bank,
+        "rekening": rekening,
+        "atasNama": atas_nama,
+        "alternative": pay_alt,
+    },
+    "signature": {
+        "mode": sig_mode,
+        "script": sig_script,
+        "image": sig_image,
+        "fullName": sig_name,
+        "role": sig_role,
+    },
+    "invoice": {
+        "number": invoice_no,
+        "date": invoice_date.strftime("%d %B %Y"),
+        "dueDate": due_date.strftime("%d %B %Y"),
+    },
+    "client": {
+        "name": client_name,
+        "program": client_program,
+    },
+    "items": items,
+    "discount": discount,
+    "tax_rate": tax_rate,
+    "notes": notes,
+}
+
+def invoice_no_exists(invoice_no: str) -> bool:
+    JSON_DIR.mkdir(parents=True, exist_ok=True)
+
+    for file in JSON_DIR.glob("*.json"):
+        try:
+            data = json.loads(file.read_text(encoding="utf-8"))
+            existing_no = data.get("invoice", {}).get("number", "")
+            if existing_no == invoice_no:
+                return True
+        except Exception:
+            pass
+
+    return False
+
+
+def safe_invoice_filename(invoice_no: str, ext: str) -> str:
+    safe_name = (
+        invoice_no
+        .replace("/", "-")
+        .replace("\\", "-")
+        .replace(" ", "-")
+    )
+    return f"{safe_name}.{ext}"
+
+
+def save_invoice_files(
+    invoice_no: str,
+    json_text: str,
+    pdf_bytes: bytes,
+    overwrite: bool = False,
+) -> tuple[Path, Path]:
+
+    JSON_DIR.mkdir(parents=True, exist_ok=True)
+    PDF_DIR.mkdir(parents=True, exist_ok=True)
+
+    json_path = JSON_DIR / safe_invoice_filename(invoice_no, "json")
+    pdf_path = PDF_DIR / safe_invoice_filename(invoice_no, "pdf")
+
+    if not overwrite:
+        if json_path.exists() or pdf_path.exists():
+            raise FileExistsError(f"Invoice {invoice_no} sudah ada.")
+
+    json_path.write_text(json_text, encoding="utf-8")
+    pdf_path.write_bytes(pdf_bytes)
+
+    index_data = {
+        "json": sorted([p.name for p in JSON_DIR.glob("*.json")]),
+        "pdf": sorted([p.name for p in PDF_DIR.glob("*.pdf")]),
+    }
+
+    INDEX_PATH.write_text(
+        json.dumps(index_data, ensure_ascii=False, indent=2),
+        encoding="utf-8"
+    )
+
+    return json_path, pdf_path
+
+html_doc = render_invoice(invoice_data, css)
+
+with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
+    generate_pdf_from_html(html_doc, tmp_pdf.name)
+    pdf_bytes = Path(tmp_pdf.name).read_bytes()
+
+components.html(html_doc, height=1200, scrolling=True)
+
+json_text = build_invoice_json(invoice_data)
+is_duplicate = invoice_no_exists(invoice_no)
+
+overwrite_existing = False
+
+if is_duplicate:
+    st.warning(
+        f"Invoice No `{invoice_no}` sudah ada."
+    )
+
+    overwrite_existing = st.checkbox(
+        "Override invoice lama",
+        value=False,
+    )
+
+save_disabled = is_duplicate and not overwrite_existing
+
+if st.button("Save Invoice PDF + JSON", disabled=save_disabled):
+
+    json_path, pdf_path = save_invoice_files(
+        invoice_no=invoice_no,
+        json_text=json_text,
+        pdf_bytes=pdf_bytes,
+        overwrite=overwrite_existing,
+    )
+
+    token = generate_token()
+    save_receipt_metadata(invoice_no, token, json_path, pdf_path)
+
+    APP_URL = "http://localhost:8501"
+    receipt_link = f"{APP_URL}?token={token}"
+
+    if overwrite_existing:
+        st.success("Invoice lama berhasil dioverride.")
+    else:
+        st.success("Invoice baru berhasil disimpan.")
+
+    st.code(receipt_link)

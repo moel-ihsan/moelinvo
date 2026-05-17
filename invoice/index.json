@@ -1,0 +1,18 @@
+{
+  "json": [
+    "MOEL-INV-001.json",
+    "MOEL-INV-002.json",
+    "MOEL-INV-003.json",
+    "MOEL-INV-004.json",
+    "MOEL-INV-005.json",
+    "MOEL-INV-006.json"
+  ],
+  "pdf": [
+    "MOEL-INV-001.pdf",
+    "MOEL-INV-002.pdf",
+    "MOEL-INV-003.pdf",
+    "MOEL-INV-004.pdf",
+    "MOEL-INV-005.pdf",
+    "MOEL-INV-006.pdf"
+  ]
+}
