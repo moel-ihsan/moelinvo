@@ -294,18 +294,20 @@ if token:
             mime="application/pdf",
         )
 
-        pdf_b64 = base64.b64encode(pdf_bytes).decode("utf-8")
+        from streamlit.components.v1 import html
 
-        st.markdown(
+        pdf_base64 = base64.b64encode(pdf_bytes).decode("utf-8")
+
+        html(
             f"""
-            <iframe
-                src="data:application/pdf;base64,{pdf_b64}"
+            <embed
+                src="data:application/pdf;base64,{pdf_base64}"
+                type="application/pdf"
                 width="100%"
                 height="900px"
-                style="border: 1px solid #ddd; border-radius: 8px;"
-            ></iframe>
+            />
             """,
-            unsafe_allow_html=True,
+            height=900,
         )
 
         st.success("Receipt valid. Silakan download PDF invoice.")
