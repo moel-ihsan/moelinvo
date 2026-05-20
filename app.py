@@ -318,27 +318,38 @@ def get_latest_invoice_file() -> Path | None:
     return files[-1] if files else None
 
 
-def load_default_invoice() -> dict:
-    latest_path = get_latest_invoice_file()
-    if latest_path and latest_path.exists():
-        try:
-            return json.loads(latest_path.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-
+def load_default_invoice(brand_config: dict) -> dict:
     return {
-        "invoice": {"number": "MOEL-INV-001", "date": "17 May 2026", "dueDate": "24 May 2026"},
-        "client": {"name": "Nama Client", "program": "Website / Graphic Design"},
+        "brand": brand_config.get("brand", {}),
+        "payment": brand_config.get("payment", {}),
+        "signature": brand_config.get("signature", {}),
+        "invoice": {
+            "number": "MOEL-INV-001",
+            "date": "17 May 2026",
+            "dueDate": "24 May 2026",
+        },
+        "client": {
+            "name": "Nama Client",
+            "program": "Website / Graphic Design",
+        },
         "items": [
-            {"description": "Pembuatan Website", "detail": "Project website company profile", "qty": 1, "price": 3500000, "link": ""},
-            {"description": "Termin Pembayaran Kedua", "detail": "Pembayaran lanjutan setelah uang muka", "qty": 1, "price": 500000, "link": ""},
+            {
+                "description": "Pembuatan Website",
+                "detail": "Project website company profile",
+                "qty": 1,
+                "price": 3500000,
+                "link": "",
+            }
         ],
-        "pricing": {"discount": 0},
+        "pricing": {
+            "discount": 0,
+        },
+        "tax_rate": 0,
         "notes": [
-            "Prices apply to digital design services only.", 
+            "Prices apply to digital design services only.",
             "Printing services are not included.",
             "All design files are delivered digitally via Canva links.",
-            "Each product item represents a specific design output."
+            "Each product item represents a specific design output.",
         ],
     }
 
@@ -434,8 +445,8 @@ def build_invoice_json(data: dict) -> str:
 
 
 css = load_css()
-default_invoice = load_default_invoice()
 brand_config = load_brand_config()
+default_invoice = load_default_invoice(brand_config)
 
 token = st.query_params.get("token")
 
@@ -656,7 +667,7 @@ with st.sidebar:
     )
 
     sig_script = st.text_input("Script", brand_config["signature"].get("script", "Moeldsgn~"))
-    sig_image = st.text_input("Image Path", brand_config["signature"].get("image", "assets/signature/signature.png"))
+    sig_image = st.text_input("Image Path", brand_config["signature"].get("image", "signature.png"))
     sig_name = st.text_input("Nama", brand_config["signature"]["fullName"])
     sig_role = st.text_input("Role", brand_config["signature"]["role"])
 
