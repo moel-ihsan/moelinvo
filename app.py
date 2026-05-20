@@ -28,8 +28,6 @@ INDEX_PATH = INVOICE_DIR / "index.json"
 JSON_DIR = INVOICE_DIR / "json"
 PDF_DIR = INVOICE_DIR / "pdf"
 
-CONFIG_DIR = BASE_DIR / "config"
-BRAND_CONFIG_PATH = CONFIG_DIR / "brand_config.json"
 RECEIPT_DIR = INVOICE_DIR / "receipts"
 
 st.set_page_config(page_title="MOELDSGN Invoice", page_icon="🧾", layout="wide")
@@ -129,6 +127,12 @@ def download_drive_file_by_name(filename: str, folder_id: str) -> bytes | None:
 
     return download_drive_file(file["id"])
 
+@st.cache_data(ttl=300)
+def download_drive_asset(filename: str) -> bytes | None:
+    return download_drive_file_by_name(
+        filename=filename,
+        folder_id=st.secrets["GOOGLE_DRIVE_ASSETS_FOLDER_ID"],
+    )
 
 def generate_token() -> str:
     return secrets.token_urlsafe(16)
@@ -340,40 +344,16 @@ def load_default_invoice() -> dict:
 
 
 def load_brand_config() -> dict:
-    default_config = {
-        "brand": {
-            "tagline": "Graphic Design Services",
-            "phone": "wa.me/6281234567890",
-            "email": "moeldsgn@gmail.com",
-            "sosmed": "@moeldsgn",
-        },
-        "payment": {
-            "bank": "BCA / BRI",
-            "rekening": "1234 5678 901",
-            "atasNama": "a/n Moel Design",
-            "alternative": "GoPay / OVO / Dana\n0812-3456-7890",
-        },
-        "signature": {
-            "mode": "script",
-            "script": "Moeldsgn~",
-            "image": "assets/signature/signature.png",
-            "fullName": "MOELDSGN",
-            "role": "Graphic Design Services",
-        },
-    }
+    data_bytes = download_drive_asset("brand_config.json")
 
-    if BRAND_CONFIG_PATH.exists():
+    if data_bytes:
         try:
-            return json.loads(BRAND_CONFIG_PATH.read_text(encoding="utf-8"))
+            return json.loads(data_bytes.decode("utf-8"))
         except Exception:
             pass
 
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    BRAND_CONFIG_PATH.write_text(
-        json.dumps(default_config, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    return default_config
+    st.error("brand_config.json tidak ditemukan di Google Drive assets.")
+    st.stop()
 
 def render_invoice(data: dict, css: str) -> str:
     original_total = sum(int(item["qty"]) * int(item["price"]) for item in data["items"])
@@ -408,15 +388,14 @@ def render_invoice(data: dict, css: str) -> str:
 
     sig = dict(data["signature"])
     if sig.get("mode") == "image" and sig.get("image"):
-        image_path = BASE_DIR / sig["image"]
+        image_name = Path(sig["image"]).name
+        img_bytes = download_drive_asset(image_name)
 
-        if image_path.exists():
-            ext = image_path.suffix.lower().replace(".", "")
-            mime = "jpeg" if ext in ["jpg", "jpeg"] else ext
+        if img_bytes:
+            ext = Path(image_name).suffix.lower().replace(".", "")
+            mime = "jpeg" if ext in ["jpg", "jpeg"] else "png"
 
-            img_bytes = image_path.read_bytes()
             img_b64 = base64.b64encode(img_bytes).decode("utf-8")
-
             sig["image"] = f"data:image/{mime};base64,{img_b64}"
         else:
             sig["mode"] = "script"
