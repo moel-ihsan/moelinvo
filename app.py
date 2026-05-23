@@ -16,6 +16,7 @@ from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
 import io
+from datetime import datetime
 
 
 BASE_DIR = Path(__file__).parent
@@ -178,6 +179,12 @@ def delete_invoice_drive(invoice_no: str):
         "deleted_receipts": deleted_receipts,
     }
 
+def parse_invoice_date(date_text: str, fallback: date) -> date:
+    try:
+        return datetime.strptime(date_text, "%d %B %Y").date()
+    except Exception:
+        return fallback
+    
 def download_drive_file(file_id: str):
     service = get_drive_service()
 
@@ -627,8 +634,29 @@ with st.expander("🗂️ Manage Existing Invoice", expanded=False):
             loaded_invoice = load_invoice_json_drive(selected_invoice_file)
 
             if loaded_invoice:
+                for key in list(st.session_state.keys()):
+                    if key.startswith((
+                        "desc_",
+                        "qty_",
+                        "price_",
+                        "detail_",
+                        "link_",
+                        "invoice_no_input",
+                        "invoice_date_input",
+                        "due_date_input",
+                        "client_name_input",
+                        "client_program_input",
+                        "tax_rate_input",
+                        "discount_input",
+                        "notes_input",
+                        "item_count_input",
+                        "overwrite_existing_input",
+                    )):
+                        del st.session_state[key]
+
                 st.session_state["edit_invoice_data"] = loaded_invoice
                 st.session_state["edit_mode"] = True
+
                 st.success(f"{selected_invoice_file} berhasil dimuat. Scroll ke form utama.")
                 st.rerun()
 
@@ -798,51 +826,149 @@ editing_invoice = st.session_state.get("edit_invoice_data")
 
 if editing_invoice:
     default_invoice = editing_invoice
-    default_discount = editing_invoice.get("pricing", {}).get("discount", 0)
-    default_tax_rate = editing_invoice.get("tax_rate", 0)
-else:
-    default_discount = default_invoice.get("pricing", {}).get("discount", 0)
-    default_tax_rate = default_invoice.get("tax_rate", 0)
+
+default_discount = default_invoice.get("pricing", {}).get("discount", 0)
+default_tax_rate = default_invoice.get("tax_rate", 0)
+
+invoice_date_default = parse_invoice_date(
+    default_invoice.get("invoice", {}).get("date", ""),
+    date.today(),
+)
+
+due_date_default = parse_invoice_date(
+    default_invoice.get("invoice", {}).get("dueDate", ""),
+    date.today() + timedelta(days=7),
+)
 
 col1, col2 = st.columns(2)
+
 with col1:
-    invoice_no = st.text_input("Invoice No", default_invoice.get("invoice", {}).get("number", "MOEL-INV-001"))
-    invoice_date = st.date_input("Invoice Date", date.today())
-    due_date = st.date_input("Due Date", date.today() + timedelta(days=7))
+    invoice_no = st.text_input(
+        "Invoice No",
+        default_invoice.get("invoice", {}).get("number", "MOEL-INV-001"),
+        key="invoice_no_input",
+    )
+
+    invoice_date = st.date_input(
+        "Invoice Date",
+        invoice_date_default,
+        key="invoice_date_input",
+    )
+
+    due_date = st.date_input(
+        "Due Date",
+        due_date_default,
+        key="due_date_input",
+    )
+
 with col2:
-    client_name = st.text_input("Client Name", default_invoice.get("client", {}).get("name", "Nama Client"))
-    client_program = st.text_input("Program / Project", default_invoice.get("client", {}).get("program", "Website / Graphic Design"))
+    client_name = st.text_input(
+        "Client Name",
+        default_invoice.get("client", {}).get("name", "Nama Client"),
+        key="client_name_input",
+    )
+
+    client_program = st.text_input(
+        "Program / Project",
+        default_invoice.get("client", {}).get("program", "Website / Graphic Design"),
+        key="client_program_input",
+    )
+
     tax_rate = st.number_input(
         "PPN / Tax Rate",
         min_value=0.0,
         max_value=1.0,
         value=float(default_tax_rate),
         step=0.01,
+        key="tax_rate_input",
     )
 
 st.subheader("Items")
+
 default_items = default_invoice.get("items", []) or []
-item_count = st.number_input("Jumlah item", min_value=1, max_value=20, value=max(1, len(default_items)), step=1)
+
+item_count = st.number_input(
+    "Jumlah item",
+    min_value=1,
+    max_value=20,
+    value=max(1, len(default_items)),
+    step=1,
+    key="item_count_input",
+)
 
 items = []
+
 for i in range(item_count):
-    fallback = default_items[i] if i < len(default_items) else {"description": "", "detail": "", "qty": 1, "price": 0, "link": ""}
+    fallback = (
+        default_items[i]
+        if i < len(default_items)
+        else {
+            "description": "",
+            "detail": "",
+            "qty": 1,
+            "price": 0,
+            "link": "",
+        }
+    )
+
     with st.expander(f"Item {i + 1}", expanded=i < 3):
         c1, c2, c3 = st.columns([3, 1, 2])
-        desc = c1.text_input("Deskripsi", fallback.get("description", ""), key=f"desc_{i}")
-        qty = c2.number_input("Qty", min_value=1, value=int(fallback.get("qty", 1)), key=f"qty_{i}")
-        price = c3.number_input("Harga", min_value=0, value=int(fallback.get("price", 0)), step=50000, key=f"price_{i}")
-        detail = st.text_input("Detail", fallback.get("detail", ""), key=f"detail_{i}")
-        link = st.text_input("Link File", fallback.get("link", ""), key=f"link_{i}")
-        items.append({"description": desc, "qty": qty, "price": price, "detail": detail, "link": link})
+
+        desc = c1.text_input(
+            "Deskripsi",
+            fallback.get("description", ""),
+            key=f"desc_{i}",
+        )
+
+        qty = c2.number_input(
+            "Qty",
+            min_value=1,
+            value=int(fallback.get("qty", 1)),
+            key=f"qty_{i}",
+        )
+
+        price = c3.number_input(
+            "Harga",
+            min_value=0,
+            value=int(fallback.get("price", 0)),
+            step=50000,
+            key=f"price_{i}",
+        )
+
+        detail = st.text_input(
+            "Detail",
+            fallback.get("detail", ""),
+            key=f"detail_{i}",
+        )
+
+        link = st.text_input(
+            "Link File",
+            fallback.get("link", ""),
+            key=f"link_{i}",
+        )
+
+        items.append({
+            "description": desc,
+            "qty": qty,
+            "price": price,
+            "detail": detail,
+            "link": link,
+        })
 
 discount = st.number_input(
     "Discount",
     min_value=0,
     value=int(default_discount),
     step=50000,
+    key="discount_input",
 )
-notes_raw = st.text_area("Notes", "\n".join(default_invoice.get("notes", [])))
+
+notes_raw = st.text_area(
+    "Notes",
+    "\n".join(default_invoice.get("notes", [])),
+    key="notes_input",
+)
+
 notes = [line.strip() for line in notes_raw.splitlines() if line.strip()]
 
 invoice_data = {
@@ -901,13 +1027,13 @@ if is_duplicate:
 
     overwrite_existing = st.checkbox(
         "Override invoice lama",
-        value=False,
+        value=bool(st.session_state.get("edit_mode")),
+        key="overwrite_existing_input",
     )
 
 save_disabled = is_duplicate and not overwrite_existing
 
 if st.button("Save Invoice PDF + JSON", disabled=save_disabled):
-
     saved_files = save_invoice_files_drive(
         invoice_no=invoice_no,
         json_text=json_text,
@@ -929,3 +1055,8 @@ if st.button("Save Invoice PDF + JSON", disabled=save_disabled):
     st.write(f"Token: `{token}`")
     st.write(f"Receipt metadata: `{receipt_file['name']}`")
     st.code(receipt_link)
+
+    st.session_state.pop("edit_invoice_data", None)
+    st.session_state.pop("edit_mode", None)
+    st.cache_data.clear()
+    st.rerun()
