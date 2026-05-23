@@ -827,6 +827,35 @@ editing_invoice = st.session_state.get("edit_invoice_data")
 if editing_invoice:
     default_invoice = editing_invoice
 
+    st.info("✏️ Sedang edit invoice existing.")
+
+    if st.button("Cancel Edit Mode"):
+        for key in list(st.session_state.keys()):
+            if key.startswith((
+                "desc_",
+                "qty_",
+                "price_",
+                "detail_",
+                "link_",
+                "invoice_no_input",
+                "invoice_date_input",
+                "due_date_input",
+                "client_name_input",
+                "client_program_input",
+                "tax_rate_input",
+                "discount_input",
+                "notes_input",
+                "item_count_input",
+                "overwrite_existing_input",
+            )):
+                del st.session_state[key]
+
+        st.session_state.pop("edit_invoice_data", None)
+        st.session_state.pop("edit_mode", None)
+
+        st.cache_data.clear()
+        st.rerun()
+
 default_discount = default_invoice.get("pricing", {}).get("discount", 0)
 default_tax_rate = default_invoice.get("tax_rate", 0)
 
@@ -1063,3 +1092,7 @@ if st.button("Save Invoice PDF + JSON", disabled=save_disabled):
 
     st.caption("Client Share URL")
     st.code(share_link)
+
+    st.session_state.pop("edit_invoice_data", None)
+    st.session_state.pop("edit_mode", None)
+    st.cache_data.clear()
