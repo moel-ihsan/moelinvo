@@ -1047,6 +1047,9 @@ if st.button("Save Invoice PDF + JSON", disabled=save_disabled):
     APP_URL = "https://moelinvo.streamlit.app"
     receipt_link = f"{APP_URL}?token={token}"
 
+    SHARE_URL = "https://invoice-moeldsgn.netlify.app"
+    share_link = f"{SHARE_URL}/{token}"
+
     if overwrite_existing:
         st.success("Invoice lama berhasil dioverride.")
     else:
@@ -1054,9 +1057,9 @@ if st.button("Save Invoice PDF + JSON", disabled=save_disabled):
 
     st.write(f"Token: `{token}`")
     st.write(f"Receipt metadata: `{receipt_file['name']}`")
+
+    st.caption("Internal Receipt URL")
     st.code(receipt_link)
 
-    st.session_state.pop("edit_invoice_data", None)
-    st.session_state.pop("edit_mode", None)
-    st.cache_data.clear()
-    st.rerun()
+    st.caption("Client Share URL")
+    st.code(share_link)
