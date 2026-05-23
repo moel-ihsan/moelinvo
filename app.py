@@ -102,6 +102,81 @@ def find_drive_file(filename: str, folder_id: str):
 
     return files[0]
 
+def list_drive_files(folder_id: str, mime_type: str | None = None):
+    service = get_drive_service()
+
+    query = f"'{folder_id}' in parents and trashed=false"
+    if mime_type:
+        query += f" and mimeType='{mime_type}'"
+
+    response = service.files().list(
+        q=query,
+        fields="files(id,name,createdTime,modifiedTime)",
+        orderBy="name",
+        supportsAllDrives=True,
+        includeItemsFromAllDrives=True,
+    ).execute()
+
+    return response.get("files", [])
+
+
+def list_invoice_json_files_drive():
+    return list_drive_files(
+        folder_id=st.secrets["GOOGLE_DRIVE_JSON_FOLDER_ID"],
+        mime_type="application/json",
+    )
+
+
+def load_invoice_json_drive(filename: str) -> dict | None:
+    data_bytes = download_drive_file_by_name(
+        filename=filename,
+        folder_id=st.secrets["GOOGLE_DRIVE_JSON_FOLDER_ID"],
+    )
+
+    if not data_bytes:
+        return None
+
+    return json.loads(data_bytes.decode("utf-8"))
+
+
+def delete_receipts_by_invoice_no(invoice_no: str):
+    receipt_folder_id = st.secrets["GOOGLE_DRIVE_RECEIPT_FOLDER_ID"]
+    receipt_files = list_drive_files(receipt_folder_id, "application/json")
+
+    deleted = 0
+
+    for file in receipt_files:
+        data_bytes = download_drive_file(file["id"])
+
+        try:
+            receipt_data = json.loads(data_bytes.decode("utf-8"))
+        except Exception:
+            continue
+
+        if receipt_data.get("invoice_no") == invoice_no:
+            delete_drive_file(file["id"])
+            deleted += 1
+
+    return deleted
+
+
+def delete_invoice_drive(invoice_no: str):
+    json_folder_id = st.secrets["GOOGLE_DRIVE_JSON_FOLDER_ID"]
+    pdf_folder_id = st.secrets["GOOGLE_DRIVE_PDF_FOLDER_ID"]
+
+    json_filename = safe_invoice_filename(invoice_no, "json")
+    pdf_filename = safe_invoice_filename(invoice_no, "pdf")
+
+    delete_drive_file_by_name(json_filename, json_folder_id)
+    delete_drive_file_by_name(pdf_filename, pdf_folder_id)
+
+    deleted_receipts = delete_receipts_by_invoice_no(invoice_no)
+
+    return {
+        "json": json_filename,
+        "pdf": pdf_filename,
+        "deleted_receipts": deleted_receipts,
+    }
 
 def download_drive_file(file_id: str):
     service = get_drive_service()
@@ -534,6 +609,54 @@ with st.sidebar:
 
 st.title("🧾 MOELDSGN Invoice Generator")
 
+with st.expander("🗂️ Manage Existing Invoice", expanded=False):
+    invoice_files = list_invoice_json_files_drive()
+    invoice_names = [f["name"] for f in invoice_files]
+
+    selected_invoice_file = st.selectbox(
+        "Pilih invoice lama",
+        invoice_names,
+        index=None,
+        placeholder="Pilih invoice JSON",
+    )
+
+    col_edit, col_delete = st.columns(2)
+
+    with col_edit:
+        if st.button("Load for Edit", disabled=not selected_invoice_file):
+            loaded_invoice = load_invoice_json_drive(selected_invoice_file)
+
+            if loaded_invoice:
+                st.session_state["edit_invoice_data"] = loaded_invoice
+                st.session_state["edit_mode"] = True
+                st.success(f"{selected_invoice_file} berhasil dimuat. Scroll ke form utama.")
+                st.rerun()
+
+    with col_delete:
+        confirm_delete = st.checkbox(
+            "Saya yakin ingin delete invoice ini",
+            disabled=not selected_invoice_file,
+        )
+
+        if st.button(
+            "Delete Invoice",
+            type="primary",
+            disabled=not selected_invoice_file or not confirm_delete,
+        ):
+            loaded_invoice = load_invoice_json_drive(selected_invoice_file)
+
+            if loaded_invoice:
+                invoice_no_to_delete = loaded_invoice["invoice"]["number"]
+                result = delete_invoice_drive(invoice_no_to_delete)
+
+                st.success(
+                    f"Invoice {invoice_no_to_delete} berhasil dihapus. "
+                    f"Receipt token terhapus: {result['deleted_receipts']}"
+                )
+
+                st.cache_data.clear()
+                st.rerun()
+
 with st.expander("📦 Bulk Import Old Invoice JSON", expanded=False):
     st.caption(
         "Upload banyak file JSON invoice lama untuk dibuatkan PDF dan receipt link secara otomatis."
@@ -671,6 +794,16 @@ with st.sidebar:
     sig_name = st.text_input("Nama", brand_config["signature"]["fullName"])
     sig_role = st.text_input("Role", brand_config["signature"]["role"])
 
+editing_invoice = st.session_state.get("edit_invoice_data")
+
+if editing_invoice:
+    default_invoice = editing_invoice
+    default_discount = editing_invoice.get("pricing", {}).get("discount", 0)
+    default_tax_rate = editing_invoice.get("tax_rate", 0)
+else:
+    default_discount = default_invoice.get("pricing", {}).get("discount", 0)
+    default_tax_rate = default_invoice.get("tax_rate", 0)
+
 col1, col2 = st.columns(2)
 with col1:
     invoice_no = st.text_input("Invoice No", default_invoice.get("invoice", {}).get("number", "MOEL-INV-001"))
@@ -679,7 +812,13 @@ with col1:
 with col2:
     client_name = st.text_input("Client Name", default_invoice.get("client", {}).get("name", "Nama Client"))
     client_program = st.text_input("Program / Project", default_invoice.get("client", {}).get("program", "Website / Graphic Design"))
-    tax_rate = st.number_input("PPN / Tax Rate", min_value=0.0, max_value=1.0, value=0.0, step=0.01)
+    tax_rate = st.number_input(
+        "PPN / Tax Rate",
+        min_value=0.0,
+        max_value=1.0,
+        value=float(default_tax_rate),
+        step=0.01,
+    )
 
 st.subheader("Items")
 default_items = default_invoice.get("items", []) or []
@@ -697,7 +836,12 @@ for i in range(item_count):
         link = st.text_input("Link File", fallback.get("link", ""), key=f"link_{i}")
         items.append({"description": desc, "qty": qty, "price": price, "detail": detail, "link": link})
 
-discount = st.number_input("Discount", min_value=0, value=int(default_invoice.get("pricing", {}).get("discount", 0)), step=50000)
+discount = st.number_input(
+    "Discount",
+    min_value=0,
+    value=int(default_discount),
+    step=50000,
+)
 notes_raw = st.text_area("Notes", "\n".join(default_invoice.get("notes", [])))
 notes = [line.strip() for line in notes_raw.splitlines() if line.strip()]
 
@@ -750,9 +894,10 @@ is_duplicate = invoice_no_exists_drive(invoice_no)
 overwrite_existing = False
 
 if is_duplicate:
-    st.warning(
-        f"Invoice No `{invoice_no}` sudah ada."
-    )
+    if st.session_state.get("edit_mode"):
+        st.info(f"Mode edit aktif untuk Invoice No `{invoice_no}`.")
+    else:
+        st.warning(f"Invoice No `{invoice_no}` sudah ada.")
 
     overwrite_existing = st.checkbox(
         "Override invoice lama",
