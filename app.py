@@ -179,6 +179,28 @@ def delete_invoice_drive(invoice_no: str):
         "deleted_receipts": deleted_receipts,
     }
 
+
+def find_receipt_by_invoice_no(invoice_no: str) -> dict | None:
+    receipt_folder_id = st.secrets["GOOGLE_DRIVE_RECEIPT_FOLDER_ID"]
+
+    receipt_files = list_drive_files(
+        receipt_folder_id,
+        "application/json",
+    )
+
+    for file in receipt_files:
+        try:
+            data_bytes = download_drive_file(file["id"])
+            receipt_data = json.loads(data_bytes.decode("utf-8"))
+
+            if receipt_data.get("invoice_no") == invoice_no:
+                return receipt_data
+
+        except Exception:
+            continue
+
+    return None
+
 def parse_invoice_date(date_text: str, fallback: date) -> date:
     try:
         return datetime.strptime(date_text, "%d %B %Y").date()
@@ -1070,8 +1092,15 @@ if st.button("Save Invoice PDF + JSON", disabled=save_disabled):
         overwrite=overwrite_existing,
     )
 
-    token = generate_token()
-    receipt_file = save_receipt_metadata_drive(invoice_no, token)
+    existing_receipt = find_receipt_by_invoice_no(invoice_no)
+
+    if overwrite_existing and existing_receipt:
+        token = existing_receipt["token"]
+        receipt_metadata_name = f"{token}.json"
+    else:
+        token = generate_token()
+        receipt_file = save_receipt_metadata_drive(invoice_no, token)
+        receipt_metadata_name = receipt_file["name"]
 
     APP_URL = "https://moelinvo.streamlit.app"
     receipt_link = f"{APP_URL}?token={token}"
@@ -1085,7 +1114,7 @@ if st.button("Save Invoice PDF + JSON", disabled=save_disabled):
         st.success("Invoice berhasil disimpan.")
 
     st.write(f"Token: `{token}`")
-    st.write(f"Receipt metadata: `{receipt_file['name']}`")
+    st.write(f"Receipt metadata: `{receipt_metadata_name}`")
 
     st.caption("Internal Receipt URL")
     st.code(receipt_link)
