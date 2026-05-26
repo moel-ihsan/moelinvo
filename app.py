@@ -16,6 +16,7 @@ from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
 import io
+from google.auth.exceptions import RefreshError
 from datetime import datetime
 
 
@@ -38,15 +39,23 @@ SCOPES = ["https://www.googleapis.com/auth/drive"]
 
 @st.cache_resource
 def get_drive_service():
-    creds = Credentials.from_authorized_user_info(
-        dict(st.secrets["google_oauth_token"]),
-        SCOPES
-    )
+    try:
+        creds = Credentials.from_authorized_user_info(
+            dict(st.secrets["google_oauth_token"]),
+            SCOPES
+        )
 
-    if creds and creds.expired and creds.refresh_token:
-        creds.refresh(Request())
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
 
-    return build("drive", "v3", credentials=creds)
+        return build("drive", "v3", credentials=creds)
+
+    except RefreshError:
+        st.error(
+            "Google Drive token sudah expired/revoked. "
+            "Generate ulang google_oauth_token lalu update Streamlit Secrets."
+        )
+        st.stop()
 
 
 get_drive_service()
