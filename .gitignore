@@ -15,3 +15,4 @@ invoice/receipts/*.json
 
 assets/signature/signature.png 
 config/brand_config.json
+generate_token.py
